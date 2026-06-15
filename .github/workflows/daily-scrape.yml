@@ -1,0 +1,114 @@
+name: Daily Wallhaven Scrape
+
+on:
+  schedule:
+    # Runs every day at 08:00 UTC (adjust as needed)
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    # Allows manual trigger from GitHub Actions UI
+    inputs:
+      pages:
+        description: "Specific page(s) to scrape, e.g. '42' or '1-3' (overrides next_page.txt)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write   # Needed to push commits back to the repo
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine page to scrape
+        id: pagedecide
+        run: |
+          if [ -n "${{ github.event.inputs.pages }}" ]; then
+            # Manual trigger with explicit page(s)
+            echo "pages=${{ github.event.inputs.pages }}" >> "$GITHUB_OUTPUT"
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+          else
+            # Scheduled run: read counter
+            PAGE=$(cat next_page.txt)
+            echo "pages=$PAGE" >> "$GITHUB_OUTPUT"
+            echo "page_folder=page_$(printf '%04d' $PAGE)" >> "$GITHUB_OUTPUT"
+            echo "mode=scheduled" >> "$GITHUB_OUTPUT"
+            echo "page_number=$PAGE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        run: pip install beautifulsoup4
+
+      - name: Run scraper
+        id: scrape
+        continue-on-error: true
+        run: |
+          PAGES="${{ steps.pagedecide.outputs.pages }}"
+          MODE="${{ steps.pagedecide.outputs.mode }}"
+
+          if [ "$MODE" = "scheduled" ]; then
+            FOLDER="${{ steps.pagedecide.outputs.page_folder }}"
+            echo "Scraping page $PAGES → $FOLDER/"
+            python3 scraper.py \
+              -p "$PAGES" \
+              -d "$FOLDER" \
+              --delay-page 2 \
+              --delay-image 1.5 \
+              --delay-detail 1.5
+            echo "folder=$FOLDER" >> "$GITHUB_OUTPUT"
+          else
+            echo "Manual scrape of page(s) $PAGES"
+            python3 scraper.py \
+              -p "$PAGES" \
+              -d "manual_scrape_$(date +%Y%m%d_%H%M%S)" \
+              --delay-page 2 \
+              --delay-image 1.5 \
+              --delay-detail 1.5
+          fi
+
+      - name: Advance page counter (scheduled only)
+        if: steps.pagedecide.outputs.mode == 'scheduled'
+        run: |
+          CURRENT=${{ steps.pagedecide.outputs.page_number }}
+          NEXT=$((CURRENT + 1))
+          echo "$NEXT" > next_page.txt
+          echo "Counter: $CURRENT → $NEXT"
+
+      - name: Commit and push changes
+        run: |
+          FOLDER="${{ steps.scrape.outputs.folder }}"
+          MODE="${{ steps.pagedecide.outputs.mode }}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage the downloaded images folder (if it exists)
+          if [ "$MODE" = "scheduled" ] && [ -d "$FOLDER" ]; then
+            git add "$FOLDER/"
+          elif [ "$MODE" != "scheduled" ]; then
+            # Manual: add any new folders created today
+            git add manual_scrape_*/
+          fi
+
+          # Always stage the counter file
+          git add next_page.txt
+
+          # Only commit if there are staged changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            if [ "$MODE" = "scheduled" ]; then
+              COMMIT_MSG="Daily scrape: page ${{ steps.pagedecide.outputs.page_number }} ($(date +%Y-%m-%d))"
+            else
+              COMMIT_MSG="Manual scrape: pages ${{ steps.pagedecide.outputs.pages }} ($(date +%Y-%m-%d))"
+            fi
+            git commit -m "$COMMIT_MSG"
+            git push
+            echo "Committed and pushed successfully."
+          fi

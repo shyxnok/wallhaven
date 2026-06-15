@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Local test downloads (CI uses page_N/ folders)
+wallpapers/
+
+# IDE
+.claude/
+.vscode/
+.idea/
