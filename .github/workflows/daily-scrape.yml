@@ -131,9 +131,8 @@ jobs:
           echo "folder=$DIR" >> "$GITHUB_OUTPUT"
           echo "has_urls=true" >> "$GITHUB_OUTPUT"
 
-          # Build raw.githubusercontent.com URLs for first 8 preview images
-          # Images are already committed & pushed, so raw URLs are live immediately
-          RAW_BASE="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}"
+          # Build pic.201562.xyz URLs for first 8 preview images
+          RAW_BASE="https://pic.201562.xyz/wallhaven"
           PREVIEWS=$(ls "$DIR"/*.{jpg,jpeg,png,gif} 2>/dev/null | head -8)
 
           if [ -n "$PREVIEWS" ]; then
