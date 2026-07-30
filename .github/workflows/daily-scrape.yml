@@ -118,6 +118,9 @@ jobs:
             DIR=$(ls -d manual_scrape_*/ 2>/dev/null | tail -1)
           fi
 
+          # Strip trailing slash (ls -d returns dirs with /)
+          DIR="${DIR%/}"
+
           if [ -z "$DIR" ] || [ ! -f "$DIR/urls.txt" ]; then
             echo "has_urls=false" >> "$GITHUB_OUTPUT"
             exit 0
