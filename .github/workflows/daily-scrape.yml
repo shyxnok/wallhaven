@@ -2,10 +2,8 @@ name: Daily Wallhaven Scrape
 
 on:
   schedule:
-    # Runs every day at 08:00 UTC (adjust as needed)
     - cron: "0 8 * * *"
   workflow_dispatch:
-    # Allows manual trigger from GitHub Actions UI
     inputs:
       pages:
         description: "Specific page(s) to scrape, e.g. '42' or '1-3' (overrides next_page.txt)"
@@ -13,7 +11,7 @@ on:
         default: ""
 
 permissions:
-  contents: write   # Needed to push commits back to the repo
+  contents: write
 
 jobs:
   scrape:
@@ -30,11 +28,9 @@ jobs:
         id: pagedecide
         run: |
           if [ -n "${{ github.event.inputs.pages }}" ]; then
-            # Manual trigger with explicit page(s)
             echo "pages=${{ github.event.inputs.pages }}" >> "$GITHUB_OUTPUT"
             echo "mode=manual" >> "$GITHUB_OUTPUT"
           else
-            # Scheduled run: read counter
             PAGE=$(cat next_page.txt)
             echo "pages=$PAGE" >> "$GITHUB_OUTPUT"
             echo "page_folder=page_$(printf '%04d' $PAGE)" >> "$GITHUB_OUTPUT"
@@ -54,7 +50,6 @@ jobs:
 
           if [ "$MODE" = "scheduled" ]; then
             FOLDER="${{ steps.pagedecide.outputs.page_folder }}"
-            echo "Scraping page $PAGES → $FOLDER/"
             python3 scraper.py \
               -p "$PAGES" \
               -d "$FOLDER" \
@@ -63,7 +58,6 @@ jobs:
               --delay-detail 1.5
             echo "folder=$FOLDER" >> "$GITHUB_OUTPUT"
           else
-            echo "Manual scrape of page(s) $PAGES"
             python3 scraper.py \
               -p "$PAGES" \
               -d "manual_scrape_$(date +%Y%m%d_%H%M%S)" \
@@ -78,9 +72,9 @@ jobs:
           CURRENT=${{ steps.pagedecide.outputs.page_number }}
           NEXT=$((CURRENT + 1))
           echo "$NEXT" > next_page.txt
-          echo "Counter: $CURRENT → $NEXT"
 
       - name: Commit and push changes
+        id: commit
         run: |
           FOLDER="${{ steps.scrape.outputs.folder }}"
           MODE="${{ steps.pagedecide.outputs.mode }}"
@@ -88,20 +82,16 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Stage the downloaded images folder (if it exists)
           if [ "$MODE" = "scheduled" ] && [ -d "$FOLDER" ]; then
             git add "$FOLDER/"
           elif [ "$MODE" != "scheduled" ]; then
-            # Manual: add any new folders created today
             git add manual_scrape_*/
           fi
 
-          # Always stage the counter file
           git add next_page.txt
 
-          # Only commit if there are staged changes
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
           else
             if [ "$MODE" = "scheduled" ]; then
               COMMIT_MSG="Daily scrape: page ${{ steps.pagedecide.outputs.page_number }} ($(date +%Y-%m-%d))"
@@ -110,5 +100,67 @@ jobs:
             fi
             git commit -m "$COMMIT_MSG"
             git push
-            echo "Committed and pushed successfully."
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+            echo "commit_msg=$COMMIT_MSG" >> "$GITHUB_OUTPUT"
           fi
+
+      # ── Telegram: prepare data ─────────────────────────────────────────
+      - name: Prepare Telegram data
+        id: tg_prep
+        if: success()
+        run: |
+          FOLDER="${{ steps.scrape.outputs.folder }}"
+          MODE="${{ steps.pagedecide.outputs.mode }}"
+
+          if [ "$MODE" = "scheduled" ]; then
+            DIR="$FOLDER"
+          else
+            DIR=$(ls -d manual_scrape_*/ 2>/dev/null | tail -1)
+          fi
+
+          if [ -z "$DIR" ] || [ ! -f "$DIR/urls.txt" ]; then
+            echo "has_urls=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          COUNT=$(wc -l < "$DIR/urls.txt" | tr -d ' ')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "folder=$DIR" >> "$GITHUB_OUTPUT"
+          echo "has_urls=true" >> "$GITHUB_OUTPUT"
+
+          MEDIA_JSON=$(head -8 "$DIR/urls.txt" | jq -R -s '
+            split("\n")
+            | map(select(length > 0) | {type: "photo", media: .})
+          ')
+          echo "media_group=$(echo "$MEDIA_JSON" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+      # ── Telegram: summary text ─────────────────────────────────────────
+      - name: Notify Telegram (summary)
+        if: success() && steps.tg_prep.outputs.has_urls == 'true'
+        uses: shyxnok/send_email@v1.0.0
+        with:
+          channel: telegram
+          body: |
+            📥 <b>Wallhaven 抓取完成</b>
+            ━━━━━━━━━━━━━━━━━━━━
+            📄 页数：${{ steps.pagedecide.outputs.page_number }}
+            🖼 图片：${{ steps.tg_prep.outputs.count }} 张
+            📁 文件夹：<code>${{ steps.tg_prep.outputs.folder }}</code>
+            💬 提交：<code>${{ steps.commit.outputs.commit_msg }}</code>
+            🔗 <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">运行详情</a>
+          telegram_parse_mode: HTML
+          telegram_chat_id: "${{ secrets.TELEGRAM_CHAT_ID }}"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+      # ── Telegram: preview images ───────────────────────────────────────
+      - name: Notify Telegram (preview images)
+        if: success() && steps.tg_prep.outputs.has_urls == 'true'
+        uses: shyxnok/send_email@v1.0.0
+        with:
+          channel: telegram
+          telegram_method: sendMediaGroup
+          telegram_media_group: ${{ steps.tg_prep.outputs.media_group }}
+          telegram_chat_id: "${{ secrets.TELEGRAM_CHAT_ID }}"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
