@@ -137,7 +137,7 @@ jobs:
       # ── Telegram: summary text ─────────────────────────────────────────
       - name: Notify Telegram (summary)
         if: success() && steps.tg_prep.outputs.has_urls == 'true'
-        uses: shyxnok/send_email@v1.0.0
+        uses: shyxnok/send_email@v1.1.0
         with:
           channel: telegram
           body: |
