@@ -128,11 +128,23 @@ jobs:
           echo "folder=$DIR" >> "$GITHUB_OUTPUT"
           echo "has_urls=true" >> "$GITHUB_OUTPUT"
 
-          MEDIA_JSON=$(head -8 "$DIR/urls.txt" | jq -R -s '
-            split("\n")
-            | map(select(length > 0) | {type: "photo", media: .})
-          ')
-          echo "media_group=$(echo "$MEDIA_JSON" | jq -c .)" >> "$GITHUB_OUTPUT"
+          # Build raw.githubusercontent.com URLs for first 8 preview images
+          # Images are already committed & pushed, so raw URLs are live immediately
+          RAW_BASE="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}"
+          PREVIEWS=$(ls "$DIR"/*.{jpg,jpeg,png,gif} 2>/dev/null | head -8)
+
+          if [ -n "$PREVIEWS" ]; then
+            FIRST=true
+            echo -n "[" > previews.json
+            for f in $PREVIEWS; do
+              FNAME=$(basename "$f")
+              [ "$FIRST" = false ] && echo -n "," >> previews.json
+              echo -n "{\"type\":\"photo\",\"media\":\"${RAW_BASE}/${DIR}/${FNAME}\"}" >> previews.json
+              FIRST=false
+            done
+            echo "]" >> previews.json
+            echo "preview_json=$(cat previews.json)" >> "$GITHUB_OUTPUT"
+          fi
 
       # ── Telegram: summary text ─────────────────────────────────────────
       - name: Notify Telegram (summary)
@@ -153,14 +165,14 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
-      # ── Telegram: preview images ───────────────────────────────────────
+      # ── Telegram: preview images (via raw.githubusercontent.com) ───────
       - name: Notify Telegram (preview images)
-        if: success() && steps.tg_prep.outputs.has_urls == 'true'
+        if: success() && steps.tg_prep.outputs.preview_json != ''
         uses: shyxnok/send_email@v1.1.0
         with:
           channel: telegram
           telegram_method: sendMediaGroup
-          telegram_media_group: ${{ steps.tg_prep.outputs.media_group }}
+          telegram_media_group: ${{ steps.tg_prep.outputs.preview_json }}
           telegram_chat_id: "${{ secrets.TELEGRAM_CHAT_ID }}"
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
