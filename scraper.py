@@ -303,6 +303,7 @@ def run_scraper(
 
     downloaded = 0
     skipped = 0
+    downloaded_urls = []
     total_pages = len(pages)
 
     for page_idx, page in enumerate(pages, start=1):
@@ -356,13 +357,16 @@ def run_scraper(
             success = download_image(img_url, save_dir, wallpaper_id=wid)
             if success:
                 downloaded += 1
+                downloaded_urls.append(img_url)
             else:
                 skipped += 1
 
             time.sleep(delay_image)
 
         time.sleep(delay_page)
-
+    urls_file = save_dir / "urls.txt"
+    urls_file.write_text("\n".join(downloaded_urls))
+    print(f"\nURL list saved: {urls_file} ({len(downloaded_urls)} URLs)")
     return downloaded, skipped
 
 
